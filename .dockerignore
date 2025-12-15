@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Poetry / venv
+.venv/
+
+# Env
+.env
+
+# OS
+.DS_Store
+
+# Git
+.git/
