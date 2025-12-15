@@ -188,8 +188,23 @@ def upsert_dm_result(user_id: str, ok: bool, err: str | None = None):
     sb.table(USERS_TABLE).upsert(payload, on_conflict="discord_user_id").execute()
 
 def get_dm_status(user_id: str):
-    r = sb.table(USERS_TABLE).select("*").eq("discord_user_id", user_id).maybe_single().execute()
-    return r.data
+    try:
+        r = (
+            sb.table(USERS_TABLE)
+            .select("*")
+            .eq("discord_user_id", user_id)
+            .maybe_single()
+            .execute()
+        )
+        # r 자체가 None인 경우 방어
+        if r is None:
+            return None
+        return getattr(r, "data", None)
+    except Exception as e:
+        # 로그만 남기고 서비스는 계속 돌아가게
+        print("[get_dm_status ERROR]", user_id, e)
+        return None
+
 
 # =====================================================
 # FastAPI setup
@@ -437,7 +452,7 @@ async def home(request: Request):
         border-color: rgba(255, 90, 107, .45);
     }}
     
-    .btnLogout: hover {{
+    .btnLogout:hover {{
       border-color: rgba(255, 90, 107, .65);
       box-shadow:
         0 0 0 1px rgba(255,90,107,.12) inset,
@@ -1038,7 +1053,9 @@ async def test_send(request: Request):
 @app.get("/api/dm/health")
 async def dm_health(request: Request):
     uid = require_login(request)
-    row = get_dm_status(uid) or {"discord_user_id": uid, "dm_status": "unknown", "dm_last_error": None}
+    row = get_dm_status(uid)
+    if not row:
+        row = {"discord_user_id": uid, "dm_status": "unknown", "dm_last_error": None}
     return JSONResponse(row)
 
 @app.get("/api/banner")
