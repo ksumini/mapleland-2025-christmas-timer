@@ -228,9 +228,19 @@ async def home(request: Request):
     invite_clicked = bool(request.session.get("invite_clicked"))
 
     if logged_in:
-        login_btn = '<div class="loginOk">✅ 로그인됨 <a class="link" href="/logout">로그아웃</a></div>'
+        # 로그인 상태: 로그아웃 버튼만
+        login_btn = """
+          <a class="btnLogout" href="/logout">
+            로그아웃
+          </a>
+        """
     else:
-        login_btn = '<a href="/auth/discord/login"><button class="btn">디스코드로 로그인</button></a>'
+        # 비로그인 상태: 로그인 버튼
+        login_btn = """
+          <a class="btnLogin" href="/auth/discord/login">
+            디스코드로 로그인
+          </a>
+        """
 
     # ✅ 로그인 후 1회 안내(권장/대안 2버튼)
     invite_banner = ""
@@ -356,6 +366,7 @@ async def home(request: Request):
     
     h1 {{
       font-size:26px;
+      line-height: 1.35; 
       margin:0 0 6px;
       letter-spacing:-0.2px;
       text-shadow: 0 2px 18px rgba(241,196,15,.08);
@@ -363,8 +374,7 @@ async def home(request: Request):
     
     .sub {{ font-size: 16px; color:var(--muted); margin:0 0 18px; }}
     .top {{ display:flex; align-items:center; justify-content:space-between; gap:10px; }}
-    .loginOk {{ color:var(--ok); font-weight:800; }}
-    .link {{ color:#9bffd3; margin-left:8px; text-decoration:none; }}
+    .authRow{{ margin-top: -6px; margin-bottom: 8px; display:flex; justify-content: flex-end; }}
 
     .btn {{
       font-size: 15px;
@@ -377,7 +387,68 @@ async def home(request: Request):
       font-weight:700;
       transition: box-shadow .18s ease, border-color .18s ease, transform .18s ease;
     }}
-
+    
+    /* 로그인/로그아웃 버튼 (상단 authRow 전용) */
+    .btnLogin, .btnLogout {{
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      gap:10px;
+    
+      padding:12px 18px;
+      border-radius:18px;
+      text-decoration:none;
+    
+      font-weight:900;
+      font-size:18px;
+      letter-spacing:-0.2px;
+    
+      background: rgba(18,24,38,.55);
+      color: var(--text);
+    
+      border:1px solid rgba(46,204,113,.45);
+      box-shadow:
+        0 10px 26px rgba(0,0,0,.35),
+        0 0 0 1px rgba(255,255,255,.05) inset;
+      backdrop-filter: blur(10px);
+    
+      transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+    }}
+    
+    .btnLogin:hover, .btnLogout:hover {{
+      transform: translateY(-1px);
+      border-color: rgba(46,204,113,.65);
+      box-shadow:
+        0 0 0 1px rgba(46,204,113,.12) inset,
+        0 16px 34px rgba(46,204,113,.14);
+    }}
+    
+    .btnIcon {{
+      width:26px; height:26px;
+      border-radius:999px;
+      display:flex; align-items:center; justify-content:center;
+      background: rgba(46,204,113,.12);
+      border: 1px solid rgba(46,204,113,.22);
+      line-height: 1;
+    }}
+    
+    /* 로그아웃은 붉은 포인트 */
+    .btnLogout {{
+        border-color: rgba(255, 90, 107, .45);
+    }}
+    
+    .btnLogout: hover {{
+      border-color: rgba(255, 90, 107, .65);
+      box-shadow:
+        0 0 0 1px rgba(255,90,107,.12) inset,
+        0 16px 34px rgba(255,90,107,.14);
+    }}
+    
+    .btnLogout .btnIcon {{
+      background: rgba(255,90,107,.12);
+      border-color: rgba(255,90,107,.22);
+    }}
+    
     /* ✅ 버튼 hover 초록 글로우 */
     .btn:hover {{
       border-color: rgba(46,204,113,.45);
@@ -448,15 +519,30 @@ async def home(request: Request):
     .meta {{ color:var(--muted); font-size:14px; margin-top:2px; line-height:1.35; }}
     .row {{ display:flex; align-items:center; justify-content:space-between; gap:8px; }}
 
-    .pill {{
+    .pill,
+    .badge {{
+      display: inline-flex;
+      align-items: center;
+      
+      line-height: 1.15;
       font-size:13px;
+      
+      white-space: nowrap;
+      flex-shrink: 0;
+      
       color:var(--muted);
       border:1px solid rgba(241,196,15,.25);
       background: rgba(241,196,15,.06);
       padding:4px 8px;
       border-radius:999px;
     }}
-
+    
+    .pill-inline {{
+      white-space: nowrap;
+      flex-shrink: 0;
+      line-height: 1.15;
+    }}
+    
     .statusCard {{ margin-top:12px; }}
     .mono {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:13px; color:var(--muted); }}
 
@@ -564,11 +650,14 @@ async def home(request: Request):
 <body>
   <div class="wrap">
     <div class="top">
-      <div>
-        <h1>🎄 메이플랜드 크리스마스 이벤트 타이머 <span class="pill">Discord DM 알림</span></h1>
+      <div class="topLeft">
+        <h1>🎄 메이플랜드 크리스마스 이벤트 타이머 <span class="pill pill-inline">Discord DM 알림</span></h1>
         <p class="sub">퀘스트 완료 후 버튼 클릭 → 시간이 되면 Discord DM으로 알림 전송</p>
       </div>
-      {login_btn}
+    </div>
+    
+    <div class="authRow">
+       {login_btn}
     </div>
     
     <div id="bannerWrap">
@@ -586,7 +675,7 @@ async def home(request: Request):
               <div class="title">루돌프 코</div>
               <div class="pill">3시간</div>
             </div>
-            <div class="meta">🫎토르의 뿔🫎<br>퀘스트 완료 후 눌러주세요!</div>
+            <div class="meta">🦌토르의 뿔🦌<br>퀘스트 완료 후 눌러주세요!</div>
           </div>
         </button>
         <div style="margin-top:12px">
