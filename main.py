@@ -5,6 +5,7 @@ import os
 import asyncio
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import FastAPI, Request, HTTPException
@@ -17,15 +18,20 @@ from supabase import create_client
 # Time utils
 # =====================================================
 KST = timezone(timedelta(hours=9))
+DEFAULT_TZ = "Asia/Seoul"
 
 def now_utc():
     return datetime.now(timezone.utc)
 
-def to_kst(dt: datetime):
-    return dt.astimezone(KST)
-
-def fmt_kst(dt: datetime):
-    return to_kst(dt).strftime("%m/%d %H:%M")
+def fmt_in_tz(dt: datetime, tz_name: str):
+    """
+    dt(aware) -> tz_name(IANA, e.g. Asia/Seoul) 기준 문자열 포맷
+    """
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo(DEFAULT_TZ)
+    return dt.astimezone(tz).strftime("%m/%d %H:%M")
 
 def humanize(sec: int):
     if sec <= 0:
@@ -205,6 +211,24 @@ def get_dm_status(user_id: str):
         print("[get_dm_status ERROR]", user_id, e)
         return None
 
+def upsert_user_tz(user_id: str, tz_name: str):
+    """
+    discord_users.tz 저장 (poller가 DB를 보므로)
+    """
+    payload = {
+        "discord_user_id": user_id,
+        "tz": tz_name,
+        "updated_at": now_utc().isoformat(),
+    }
+    sb.table(USERS_TABLE).upsert(payload, on_conflict="discord_user_id").execute()
+
+def get_user_tz(user_id: str) -> str:
+    """
+    우선 discord_users에서 tz 조회, 없으면 기본값
+    """
+    row = get_dm_status(user_id) or {}
+    tz = row.get("tz")
+    return tz or DEFAULT_TZ
 
 # =====================================================
 # FastAPI setup
@@ -769,9 +793,25 @@ async def home(request: Request):
   </div>
 
 <script>
-const KST_MIN = 9 * 60;
-
 function pad(n) {{ return String(n).padStart(2,'0'); }}
+
+async function ensureTz() {{
+  try {{
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone; // e.g. "Asia/Seoul"
+    await fetch('/api/tz', {{
+      method: 'POST',
+      headers: {{'Content-Type':'application/json'}},
+      body: JSON.stringify({{ tz }})
+    }});
+  }} catch(e) {{}}
+}}
+
+let tzReady = false;
+async function ensureTzOnce() {{
+    if (tzReady) return;
+    tzReady = true;
+    await ensureTz();
+}}
 
 function openFeedback() {{
     window.open(
@@ -779,13 +819,6 @@ function openFeedback() {{
         '_blank',
         'noopener'
     );
-}}
-
-function toKstString(iso) {{
-  if(!iso) return "-";
-  const d = new Date(iso);
-  const k = new Date(d.getTime() + (KST_MIN * 60 * 1000));
-  return `${{pad(k.getMonth()+1)}}/${{pad(k.getDate())}} ${{pad(k.getHours())}}:${{pad(k.getMinutes())}}`;
 }}
 
 function humanizeSeconds(sec) {{
@@ -883,7 +916,7 @@ async function fetchDmHealth() {{
 
 function calc(timer, serverNowIso, totalSec) {{
   if(!timer || timer.status !== 'scheduled') {{
-    return {{ active:false, leftText:"설정 없음", dueKst:"-", setKst:"-", pct:0 }};
+    return {{ active:false, leftText:"설정 없음", dueLocal:"-", setLocal:"-", pct:0 }};
   }}
   const now = new Date(serverNowIso);
   const due = new Date(timer.due_at);
@@ -896,8 +929,9 @@ function calc(timer, serverNowIso, totalSec) {{
     active:true,
     leftSec,
     leftText: humanizeSeconds(leftSec),
-    dueKst: toKstString(timer.due_at),
-    setKst: toKstString(timer.last_set_at),
+    // 서버에서 "사용자 타임존 기준" 문자열 내리기
+    dueLocal: timer.due_at_local || "-",
+    setLocal: timer.last_set_at_local || "-",    
     pct
   }};
 }}
@@ -905,6 +939,10 @@ function calc(timer, serverNowIso, totalSec) {{
 let lastData = null;
 
 async function refreshStatus() {{
+  // ✅ 최초 1회(혹은 주기적으로) TZ 저장. 실패해도 기능은 동작.
+  // - session/DB에 저장되므로 poller(DM)도 동일 TZ로 보냄
+  await ensureTzOnce();
+  
   const data = await fetchStatus();
   if(!data) return;
   lastData = data;
@@ -916,9 +954,10 @@ async function refreshStatus() {{
   document.getElementById('bandage_left').textContent = b.leftText;
 
   document.getElementById('rudolph_line').textContent =
-    r.active ? `다음 알림 ${{r.dueKst}} (남은 ${{r.leftText}})` : "설정 없음";
+    r.active ? `다음 알림 ${{r.dueLocal}} (남은 ${{r.leftText}})` : "설정 없음";
+
   document.getElementById('bandage_line').textContent =
-    b.active ? `다음 알림 ${{b.dueKst}} (남은 ${{b.leftText}})` : "설정 없음";
+    b.active ? `다음 알림 ${{b.dueLocal}} (남은 ${{b.leftText}})` : "설정 없음";
 
   document.getElementById('rudolph_bar').style.width = r.pct + "%";
   document.getElementById('bandage_bar').style.width = b.pct + "%";
@@ -944,8 +983,8 @@ function renderDetail() {{
   const b = calc(data.timers.bandage, data.server_now, 1*3600);
 
   const rows = [
-    {{ name: "루돌프 코 (3시간)", due: r.dueKst, left: r.leftText, set: r.setKst, pct: r.pct }},
-    {{ name: "반창고 (1시간)", due: b.dueKst, left: b.leftText, set: b.setKst, pct: b.pct }}
+    {{ name: "루돌프 코 (3시간)", due: r.dueLocal, left: r.leftText, set: r.setLocal, pct: r.pct }},
+    {{ name: "반창고 (1시간)", due: b.dueLocal, left: b.leftText, set: b.setLocal, pct: b.pct }}
   ];
 
   document.getElementById('detailBody').innerHTML = rows.map(x => `
@@ -1011,6 +1050,27 @@ async def discord_callback(request: Request, code: str | None = None, error: str
 # =====================================================
 # API
 # =====================================================
+@app.post("/api/tz")
+async def set_tz(request: Request):
+    """
+    브라우저의 IANA time zone을 받아서
+    - session에 저장 (UI)
+    - discord_users.tz에 저장 (poller DM)
+    """
+    uid = require_login(request)
+    data = await request.json()
+    tz = (data.get("tz") or "").strip()
+
+    # 최소 검증
+    if not tz or len(tz) > 64 or "/" not in tz:
+        raise HTTPException(400, "bad tz")
+
+    prev = request.session.get("tz") or get_user_tz(uid)
+    request.session["tz"] = tz
+    if tz != prev:
+        upsert_user_tz(uid, tz)
+    return JSONResponse({"ok": True, "tz": tz})
+
 @app.post("/api/ack/{kind}")
 async def ack(request: Request, kind: str):
     # invite/public 둘 중 하나만 오게
@@ -1019,25 +1079,27 @@ async def ack(request: Request, kind: str):
     request.session["invite_clicked"] = True
     return JSONResponse({"ok": True})
 
-
 @app.post("/api/timer/{timer_type}")
 async def set_timer(request: Request, timer_type: str):
     uid = require_login(request)
+    tz_name = request.session.get("tz") or get_user_tz(uid)
+    request.session["tz"] = tz_name
     if timer_type not in ("rudolph", "bandage"):
         raise HTTPException(400, "unknown timer_type")
 
     hours = 3 if timer_type == "rudolph" else 1
-    due_k = datetime.now(KST) + timedelta(hours=hours)
-    due_u = due_k.astimezone(timezone.utc)
-
+    # 타이머 계산/저장은 UTC 기준으로 (DB 표준화)
+    due_u = now_utc() + timedelta(hours=hours)
     upsert_timer(uid, timer_type, due_u)
 
     label = "루돌프 코(3시간)" if timer_type == "rudolph" else "반창고(1시간)"
-    return HTMLResponse(f"✅ {label} 타이머 갱신!\n- 다음 알림: {fmt_kst(due_u)} (KST)")
+    return HTMLResponse(f"✅ {label} 타이머 갱신!\n- 다음 알림: {fmt_in_tz(due_u, tz_name)} ({tz_name})")
 
 @app.post("/api/test-send")
 async def test_send(request: Request):
     uid = require_login(request)
+    tz_name = request.session.get("tz") or get_user_tz(uid)
+    request.session["tz"] = tz_name
     try:
         await discord_send_dm(uid, "✅ 테스트 DM: 테스트 메시지가 정상적으로 도착했어요!")
         upsert_dm_result(uid, ok=True)
@@ -1072,19 +1134,39 @@ async def banner_state(request: Request):
 async def status_json(request: Request):
     uid = require_login(request)
     timers = get_timers(uid)
+    tz_name = request.session.get("tz") or get_user_tz(uid)
+    request.session["tz"] = tz_name
+
+    def local_str_from_iso(iso: str | None):
+        if not iso:
+            return None
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        return fmt_in_tz(dt, tz_name)
 
     def norm(row):
         if not row:
             return None
+
+        due_iso = row.get("due_at")
+        set_iso = row.get("last_set_at")
+
         return {
             "timer_type": row.get("timer_type"),
             "status": row.get("status"),
-            "last_set_at": row.get("last_set_at"),
-            "due_at": row.get("due_at"),
-        }
+
+            # 계산용(UTC ISO)
+            "last_set_at": set_iso,
+            "due_at": due_iso,
+
+            # 표시용(사용자 TZ 문자열)
+            "last_set_at_local": local_str_from_iso(set_iso),
+            "due_at_local": local_str_from_iso(due_iso),
+            }
 
     return JSONResponse({
         "server_now": now_utc().isoformat(),
+        "server_now_local": fmt_in_tz(now_utc(), tz_name),
+        "tz": tz_name,
         "timers": {
             "rudolph": norm(timers.get("rudolph")),
             "bandage": norm(timers.get("bandage")),
@@ -1103,12 +1185,13 @@ async def poller():
                 t = row["timer_type"]
 
                 due = datetime.fromisoformat(row["due_at"].replace("Z", "+00:00"))
-                due_k = to_kst(due)
+                tz_name = get_user_tz(uid)
+                due_local = fmt_in_tz(due, tz_name)
 
                 if t == "rudolph":
-                    msg = f"🦌 루돌프 코 쿨타임 끝! ({due_k:%m/%d %H:%M})"
+                    msg = f"🦌 루돌프 코 쿨타임 끝! ({due_local})"
                 else:
-                    msg = f"🩹 반창고 쿨타임 끝! ({due_k:%m/%d %H:%M})"
+                    msg = f"🩹 반창고 쿨타임 끝! ({due_local})"
 
                 try:
                     await discord_send_dm(uid, msg)
