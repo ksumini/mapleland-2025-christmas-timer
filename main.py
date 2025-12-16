@@ -862,23 +862,17 @@ async function testSend(){{
   if (r.status === 401) {{ showLoginRequired(); return; }}
   const t = await r.text();
   document.getElementById('hint').textContent = t.replaceAll('\\n','  ');
-
-  if(!r.ok) {{
-    showWarn(`
-      <b>DM 전송 실패</b><br/>
-      먼저 아래를 확인해 주세요.<br/>
-      1) 개인 서버에 봇을 초대했는지<br/>
-      2) 디스코드 설정에서 “서버 멤버의 DM 허용”이 꺼져있지 않은지<br/><br/>
-      <span class="mono">${{t}}</span>
-    `);
-  }} else {{
+  
+  if (r.ok) {{
     hideWarn();
   }}
+  
+  await refreshStatus();
 }}
 
 function showLoginRequired() {{
   showWarn(`
-    <b>로그인이 필요합니다.</b><br/>
+    <b>알림을 받기 위해 로그인이 필요합니다.</b><br/>
     오른쪽 상단의 디스코드로 로그인 버튼을 눌러주세요.
   `);
   
@@ -979,8 +973,8 @@ async function refreshStatus() {{
   const dm = await fetchDmHealth();
   if(dm && dm.dm_status === 'fail') {{
     showWarn(`
-      <b>DM이 막혀있는 것 같아요😢</b><br/>
-      봇 초대 후 “테스트 DM” 버튼으로 먼저 확인해 주세요.
+      <b>테스트 DM을 성공적으로 보낼 수 없어요😢</b><br/>
+      위의 <b>“봇 초대하기 → 테스트 DM”</b> 버튼을 다시 눌러주세요.
     `);
   }}
 }}
