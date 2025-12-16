@@ -811,6 +811,8 @@ async def home(request: Request):
 <script>
 function pad(n) {{ return String(n).padStart(2,'0'); }}
 
+let tzReady = false;
+
 async function ensureTz() {{
   try {{
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone; // e.g. "Asia/Seoul"
@@ -819,14 +821,15 @@ async function ensureTz() {{
       headers: {{'Content-Type':'application/json'}},
       body: JSON.stringify({{ tz }})
     }});
+    return r.ok; // 성공 여부 반환
   }} catch(e) {{}}
 }}
 
-let tzReady = false;
 async function ensureTzOnce() {{
     if (tzReady) return;
-    tzReady = true;
-    await ensureTz();
+    const ok = await ensureTz();
+    if (ok) tzReady = true;
+    // 실패(401 포함)면 tzReady는 false 유지 → 로그인 후 다시 시도 가능
 }}
 
 function openFeedback() {{
@@ -964,10 +967,12 @@ let lastData = null;
 async function refreshStatus() {{
   // ✅ 최초 1회(혹은 주기적으로) TZ 저장. 실패해도 기능은 동작.
   // - session/DB에 저장되므로 poller(DM)도 동일 TZ로 보냄
-  await ensureTzOnce();
   
   const data = await fetchStatus();
-  if(!data) return;
+  if(!data) return; // 로그인 안되어 401이면 여기서 종료
+  
+  await ensureTzOnce();
+  
   lastData = data;
 
   const r = calc(data.timers.rudolph, data.server_now, 3*3600);
