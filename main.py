@@ -53,9 +53,6 @@ DISCORD_CLIENT_ID = os.environ["DISCORD_CLIENT_ID"]
 DISCORD_CLIENT_SECRET = os.environ["DISCORD_CLIENT_SECRET"]
 DISCORD_BOT_TOKEN = os.environ["DISCORD_BOT_TOKEN"]
 
-# 공용 서버 초대 링크 (대안 버튼용)
-PUBLIC_SERVER_INVITE_URL = os.environ.get("PUBLIC_SERVER_INVITE_URL", "")
-
 POLL_SECONDS = int(os.getenv("POLL_SECONDS", "30"))
 POLL_LIMIT = int(os.getenv("POLL_LIMIT", "50"))
 
@@ -91,7 +88,7 @@ def discord_bot_invite_url():
     params = {
         "client_id": DISCORD_CLIENT_ID,
         "scope": "bot",
-        "permissions": "0", # DM 최소 권한
+        "permissions": "0",  # DM 최소 권한
     }
     return f"{DISCORD_AUTH_URL}?{urlencode(params)}"
 
@@ -143,6 +140,33 @@ async def discord_send_dm(user_id: str, text: str):
 # =====================================================
 # DB helpers
 # =====================================================
+def get_dm_status(user_id: str):
+    try:
+        r = (
+            sb.table(USERS_TABLE)
+            .select("*")
+            .eq("discord_user_id", user_id)
+            .maybe_single()
+            .execute()
+        )
+        if r is None:
+            return None
+        return getattr(r, "data", None)
+    except Exception as e:
+        print("[get_dm_status ERROR]", user_id, e)
+        return None
+
+def is_dm_ready(user_id: str) -> bool:
+    row = get_dm_status(user_id) or {}
+    return row.get("dm_status") == "ok"
+
+def require_dm_ready(user_id: str):
+    if not is_dm_ready(user_id):
+        raise HTTPException(
+            status_code=400,
+            detail="DM 알림을 받으려면 먼저 개인 서버에 봇을 초대하고, ‘테스트 DM’으로 활성화를 확인해 주세요."
+        )
+
 def cancel_timer(user_id: str, timer_type: str, reason: str = "user_canceled"):
     sb.table(TIMERS_TABLE).update({
         "status": "canceled",
@@ -200,28 +224,7 @@ def upsert_dm_result(user_id: str, ok: bool, err: str | None = None):
     }
     sb.table(USERS_TABLE).upsert(payload, on_conflict="discord_user_id").execute()
 
-def get_dm_status(user_id: str):
-    try:
-        r = (
-            sb.table(USERS_TABLE)
-            .select("*")
-            .eq("discord_user_id", user_id)
-            .maybe_single()
-            .execute()
-        )
-        # r 자체가 None인 경우 방어
-        if r is None:
-            return None
-        return getattr(r, "data", None)
-    except Exception as e:
-        # 로그만 남기고 서비스는 계속 돌아가게
-        print("[get_dm_status ERROR]", user_id, e)
-        return None
-
 def upsert_user_tz(user_id: str, tz_name: str):
-    """
-    discord_users.tz 저장 (poller가 DB를 보므로)
-    """
     payload = {
         "discord_user_id": user_id,
         "tz": tz_name,
@@ -230,9 +233,6 @@ def upsert_user_tz(user_id: str, tz_name: str):
     sb.table(USERS_TABLE).upsert(payload, on_conflict="discord_user_id").execute()
 
 def get_user_tz(user_id: str) -> str:
-    """
-    우선 discord_users에서 tz 조회, 없으면 기본값
-    """
     row = get_dm_status(user_id) or {}
     tz = row.get("tz")
     return tz or DEFAULT_TZ
@@ -242,7 +242,12 @@ def get_user_tz(user_id: str) -> str:
 # =====================================================
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
-app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, same_site="lax", https_only=False)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SESSION_SECRET,
+    same_site="lax",
+    https_only=False,
+)
 
 def require_login(request: Request) -> str:
     uid = request.session.get("discord_user_id")
@@ -257,13 +262,6 @@ def require_login(request: Request) -> str:
 async def out_invite():
     return RedirectResponse(discord_bot_invite_url(), status_code=302)
 
-@app.get("/out/public")
-async def out_public():
-    if not PUBLIC_SERVER_INVITE_URL:
-        # 설정 안 했으면 홈으로 보내기 (새 탭에서)
-        return RedirectResponse("/", status_code=302)
-    return RedirectResponse(PUBLIC_SERVER_INVITE_URL, status_code=302)
-
 # =====================================================
 # Web UI
 # =====================================================
@@ -271,48 +269,40 @@ async def out_public():
 async def home(request: Request):
     uid = request.session.get("discord_user_id")
     logged_in = bool(uid)
-    invite_clicked = bool(request.session.get("invite_clicked"))
 
-    if logged_in:
-        # 로그인 상태: 로그아웃 버튼만
-        login_btn = """
-          <a class="btnLogout" href="/logout">
-            로그아웃
-          </a>
-        """
-    else:
-        # 비로그인 상태: 로그인 버튼
-        login_btn = """
-          <a class="btnLogin" href="/auth/discord/login">
-            디스코드로 로그인
-          </a>
-        """
-
-    # ✅ 로그인 후 1회 안내(권장/대안 2버튼)
+    # ✅ 항상 초기화
     invite_banner = ""
-    if logged_in and (not invite_clicked):
-        invite_banner = """
-        <div class="banner2">
-          <div class="bannerText">
-            <div class="bannerTitle">📩 DM 알림을 받으려면 아래 중 하나만 해주세요 <span class="badge">(1회)</span></div>
-            <div class="bannerSub">
-              <span class="hint">권장:</span> 개인 서버에 봇 초대
-              <span class="sep">·</span>
-              <span class="hint">대안:</span> 공용 서버 참여로 DM 활성화
-            </div>
-            <div class="bannerSub2">
-              개인 서버가 없으면 30초만에 만들 수 있어요:
-              <a class="miniLink" href="https://support.discord.com/hc/ko/articles/204849977" target="_blank" rel="noopener">서버 만들기</a>
-            </div>
-          </div>
 
-          <div class="bannerBtns">
-            <button class="btnPrimary" onclick="openExternal('invite')">봇 초대하기</button>
-            <button class="btnGhost" onclick="openExternal('public')">DM 활성화(공용)</button>
-          </div>
-        </div>
-        """
+    # ✅ 항상 정의
+    if logged_in:
+        login_btn = """<a class="btnLogout" href="/logout">로그아웃</a>"""
+    else:
+        login_btn = """<a class="btnLogin" href="/auth/discord/login">디스코드로 로그인</a>"""
 
+    dm_ready = False
+    if logged_in:
+        dm_ready = is_dm_ready(uid)
+        if not dm_ready:
+            invite_banner = """
+            <div class="banner2">
+              <div class="bannerText">
+                <div class="bannerTitle">📩 DM 알림을 받으려면 먼저 2단계만 완료해 주세요</div>
+                <div class="bannerSub">
+                  1) 개인 서버(관리자)로 봇 초대<br/>
+                  2) “테스트 DM”으로 알림 수신 확인
+                </div>
+                <div class="bannerSub2">
+                  개인 서버가 없으면 30초만에 만들 수 있어요:
+                  <a class="miniLink" href="https://support.discord.com/hc/ko/articles/204849977" target="_blank" rel="noopener">서버 만들기</a>
+                </div>
+              </div>
+
+              <div class="bannerBtns">
+                <button class="btnPrimary" onclick="openExternal('invite')">봇 초대하기</button>
+                <button class="btnGhost" onclick="testSend()">테스트 DM</button>
+              </div>
+            </div>
+            """
 
     html = """
 <!doctype html>
@@ -323,7 +313,6 @@ async def home(request: Request):
   <title>메이플랜드 크리스마스 이벤트 타이머 (Discord DM)</title>
   <style>
     :root {{
-      /* 기존 테마 변수 */
       --bg:#0b0f17;
       --card:#121826;
       --muted:#9aa4b2;
@@ -332,7 +321,6 @@ async def home(request: Request):
       --ok:#2ecc71;
       --line:rgba(255,255,255,.08);
 
-      /* 🎄 크리스마스 포인트 컬러 */
       --xmas-red:#ff5a6b;
       --xmas-green:#2ecc71;
       --xmas-gold:#f1c40f;
@@ -346,7 +334,7 @@ async def home(request: Request):
         var(--bg);
       background-attachment: fixed;
     }}
-    
+
     body {{
       font-size: 16px;
       font-family: system-ui, -apple-system;
@@ -357,25 +345,24 @@ async def home(request: Request):
     }}
 
     .wrap {{ max-width:720px; margin:0 auto; padding:24px 14px 60px; }}
-    
-    /* ✅ Floating feedback button (bottom-right) */
+
     .fabFeedback{{
       position: fixed;
       right: 16px;
       bottom: 16px;
       z-index: 50;
-    
+
       display: inline-flex;
       align-items: center;
       gap: 8px;
-    
+
       padding: 10px 12px;
       border-radius: 999px;
       border: 1px solid rgba(241,196,15,.28);
       background: rgba(18,24,38,.92);
       color: var(--text);
       cursor: pointer;
-    
+
       font-weight: 900;
       font-size: 13px;
       box-shadow:
@@ -384,7 +371,7 @@ async def home(request: Request):
       backdrop-filter: blur(10px);
       transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
     }}
-    
+
     .fabFeedback:hover{{
       transform: translateY(-1px);
       border-color: rgba(46,204,113,.45);
@@ -392,7 +379,7 @@ async def home(request: Request):
         0 0 0 1px rgba(46,204,113,.12) inset,
         0 16px 34px rgba(46,204,113,.14);
     }}
-    
+
     .fabFeedback .fabIcon{{
       width: 22px;
       height: 22px;
@@ -403,21 +390,19 @@ async def home(request: Request):
       background: rgba(241,196,15,.12);
       border: 1px solid rgba(241,196,15,.22);
     }}
-    
-    /* 모바일에서 너무 커 보이면 살짝 줄이기 */
+
     @media (max-width:560px){{
       .fabFeedback{{ right: 12px; bottom: 12px; padding: 9px 11px; }}
     }}
 
-    
     h1 {{
       font-size:26px;
-      line-height: 1.35; 
+      line-height: 1.35;
       margin:0 0 6px;
       letter-spacing:-0.2px;
       text-shadow: 0 2px 18px rgba(241,196,15,.08);
     }}
-    
+
     .sub {{ font-size: 16px; color:var(--muted); margin:0 0 18px; }}
     .top {{ display:flex; align-items:center; justify-content:space-between; gap:10px; }}
     .authRow{{ margin-top: -6px; margin-bottom: 8px; display:flex; justify-content: flex-end; }}
@@ -433,34 +418,33 @@ async def home(request: Request):
       font-weight:700;
       transition: box-shadow .18s ease, border-color .18s ease, transform .18s ease;
     }}
-    
-    /* 로그인/로그아웃 버튼 (상단 authRow 전용) */
+
     .btnLogin, .btnLogout {{
       display:inline-flex;
       align-items:center;
       justify-content:center;
       gap:10px;
-    
+
       padding:12px 18px;
       border-radius:18px;
       text-decoration:none;
-    
+
       font-weight:900;
       font-size:18px;
       letter-spacing:-0.2px;
-    
+
       background: rgba(18,24,38,.55);
       color: var(--text);
-    
+
       border:1px solid rgba(46,204,113,.45);
       box-shadow:
         0 10px 26px rgba(0,0,0,.35),
         0 0 0 1px rgba(255,255,255,.05) inset;
       backdrop-filter: blur(10px);
-    
+
       transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
     }}
-    
+
     .btnLogin:hover, .btnLogout:hover {{
       transform: translateY(-1px);
       border-color: rgba(46,204,113,.65);
@@ -468,34 +452,18 @@ async def home(request: Request):
         0 0 0 1px rgba(46,204,113,.12) inset,
         0 16px 34px rgba(46,204,113,.14);
     }}
-    
-    .btnIcon {{
-      width:26px; height:26px;
-      border-radius:999px;
-      display:flex; align-items:center; justify-content:center;
-      background: rgba(46,204,113,.12);
-      border: 1px solid rgba(46,204,113,.22);
-      line-height: 1;
-    }}
-    
-    /* 로그아웃은 붉은 포인트 */
+
     .btnLogout {{
-        border-color: rgba(255, 90, 107, .45);
+      border-color: rgba(255, 90, 107, .45);
     }}
-    
+
     .btnLogout:hover {{
       border-color: rgba(255, 90, 107, .65);
       box-shadow:
         0 0 0 1px rgba(255,90,107,.12) inset,
         0 16px 34px rgba(255,90,107,.14);
     }}
-    
-    .btnLogout .btnIcon {{
-      background: rgba(255,90,107,.12);
-      border-color: rgba(255,90,107,.22);
-    }}
-    
-    /* ✅ 버튼 hover 초록 글로우 */
+
     .btn:hover {{
       border-color: rgba(46,204,113,.45);
       box-shadow:
@@ -507,7 +475,6 @@ async def home(request: Request):
     .grid {{ display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin-top:16px; }}
     @media (max-width: 560px) {{ .grid {{ grid-template-columns:1fr; }} }}
 
-    /* 카드: 모서리 하이라이트(은은하게) + 골드 글로우 */
     .card {{
       position: relative;
       background:var(--card);
@@ -521,7 +488,6 @@ async def home(request: Request):
       overflow:hidden;
     }}
 
-    /* 카드 모서리 라이트(좌상단/우하단) */
     .card::before {{
       content:"";
       position:absolute;
@@ -549,7 +515,6 @@ async def home(request: Request):
       transition: box-shadow .18s ease, border-color .18s ease, transform .18s ease;
     }}
 
-    /* 타이머 버튼 hover도 초록 글로우 */
     .timerBtn:hover {{
       border-color: rgba(46,204,113,.45);
       box-shadow:
@@ -569,26 +534,26 @@ async def home(request: Request):
     .badge {{
       display: inline-flex;
       align-items: center;
-      
+
       line-height: 1.15;
       font-size:13px;
-      
+
       white-space: nowrap;
       flex-shrink: 0;
-      
+
       color:var(--muted);
       border:1px solid rgba(241,196,15,.25);
       background: rgba(241,196,15,.06);
       padding:4px 8px;
       border-radius:999px;
     }}
-    
+
     .pill-inline {{
       white-space: nowrap;
       flex-shrink: 0;
       line-height: 1.15;
     }}
-    
+
     .statusCard {{ margin-top:12px; }}
     .mono {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:13px; color:var(--muted); }}
 
@@ -611,7 +576,6 @@ async def home(request: Request):
     .kpi .k {{ color:var(--muted); font-size:13px; }}
     .kpi .v {{ font-weight:800; font-size: 24px; margin-top:4px; }}
 
-    /* banner(권장/대안) */
     .banner2{{
       margin-top:14px;
       padding:12px 12px;
@@ -625,17 +589,7 @@ async def home(request: Request):
     }}
     .bannerText{{ display:flex; flex-direction:column; gap:4px; }}
     .bannerTitle{{ font-weight:900; }}
-    .badge{{
-      font-size:12px;
-      color:var(--muted);
-      border:1px solid var(--line);
-      padding:2px 8px;
-      border-radius:999px;
-      margin-left:6px;
-    }}
     .bannerSub, .bannerSub2{{ color:var(--muted); font-size:13px; line-height:1.35; }}
-    .hint{{ color:var(--text); font-weight:700; }}
-    .sep{{ opacity:.6; padding:0 6px; }}
     .miniLink{{ color:#9bffd3; text-decoration:none; border-bottom:1px dotted rgba(155,255,211,.45); }}
     .bannerBtns{{ display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }}
 
@@ -683,7 +637,6 @@ async def home(request: Request):
 
     .warnBox {{ margin-top:10px; padding:10px; border-radius:14px; border:1px solid rgba(255,107,107,.35); background:rgba(255,107,107,.08); color:#ffd7d7; display:none; }}
 
-    /* modal */
     .modalBg {{ position:fixed; inset:0; background:rgba(0,0,0,.55); display:none; align-items:center; justify-content:center; padding:16px; }}
     .modal {{ width:min(780px, 100%); background:var(--card); border:1px solid var(--line); border-radius:18px; padding:14px; }}
     .modalHeader {{ display:flex; justify-content:space-between; align-items:center; }}
@@ -701,15 +654,15 @@ async def home(request: Request):
         <p class="sub">퀘스트 완료 후 버튼 클릭 → 시간이 되면 Discord DM으로 알림 전송</p>
       </div>
     </div>
-    
+
     <div class="authRow">
        {login_btn}
     </div>
-    
+
     <div id="bannerWrap">
       {invite_banner}
     </div>
-    
+
     <div class="warnBox" id="dmWarn"></div>
 
     <div class="grid">
@@ -728,7 +681,7 @@ async def home(request: Request):
           <div class="mono" id="rudolph_line">상태 불러오는 중…</div>
           <div class="progress" style="margin-top:8px"><div class="bar" id="rudolph_bar"></div></div>
         </div>
-        
+
         <div style="margin-top:10px; display:flex; gap:8px;">
           <button class="btn" onclick="cancelTimer('rudolph')">중지</button>
         </div>
@@ -748,7 +701,7 @@ async def home(request: Request):
         <div style="margin-top:12px">
           <div class="mono" id="bandage_line">상태 불러오는 중…</div>
           <div class="progress" style="margin-top:8px"><div class="bar" id="bandage_bar"></div></div>
-          
+
           <div style="margin-top:10px; display:flex; gap:8px;">
             <button class="btn" onclick="cancelTimer('bandage')">중지</button>
           </div>
@@ -781,7 +734,6 @@ async def home(request: Request):
     </div>
   </div>
 
-  <!-- Modal -->
   <div class="modalBg" id="modalBg" onclick="closeDetail(event)">
     <div class="modal" onclick="event.stopPropagation()">
       <div class="modalHeader">
@@ -809,35 +761,34 @@ async def home(request: Request):
   </div>
 
 <script>
-function pad(n) {{ return String(n).padStart(2,'0'); }}
-
 let tzReady = false;
 
 async function ensureTz() {{
   try {{
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone; // e.g. "Asia/Seoul"
-    await fetch('/api/tz', {{
+    const r = await fetch('/api/tz', {{
       method: 'POST',
       headers: {{'Content-Type':'application/json'}},
       body: JSON.stringify({{ tz }})
     }});
-    return r.ok; // 성공 여부 반환
-  }} catch(e) {{}}
+    return r.ok;
+  }} catch(e) {{
+    return false;
+  }}
 }}
 
 async function ensureTzOnce() {{
-    if (tzReady) return;
-    const ok = await ensureTz();
-    if (ok) tzReady = true;
-    // 실패(401 포함)면 tzReady는 false 유지 → 로그인 후 다시 시도 가능
+  if (tzReady) return;
+  const ok = await ensureTz();
+  if (ok) tzReady = true;
 }}
 
 function openFeedback() {{
-    window.open(
-        'https://docs.google.com/forms/d/1ht8IpW7Mm4tuScg8JVVQ4cDkU4tcQ1NO5RQ7groAOps',
-        '_blank',
-        'noopener'
-    );
+  window.open(
+    'https://docs.google.com/forms/d/1ht8IpW7Mm4tuScg8JVVQ4cDkU4tcQ1NO5RQ7groAOps',
+    '_blank',
+    'noopener'
+  );
 }}
 
 function humanizeSeconds(sec) {{
@@ -865,12 +816,10 @@ async function openExternal(kind) {{
     await fetch('/api/ack/' + kind, {{ method: 'POST' }});
   }} catch(e) {{}}
 
-  const url = (kind === 'invite') ? '/out/invite' : '/out/public';
-  window.open(url, '_blank', 'noopener');
+  window.open('/out/invite', '_blank', 'noopener');
 
-  // 새 탭에서 디스코드 처리되는 동안: 배너 상태 polling
   const started = Date.now();
-  const limitMs = 60 * 1000; // 최대 60초만 체크
+  const limitMs = 60 * 1000;
 
   const timer = setInterval(async () => {{
     try {{
@@ -880,12 +829,8 @@ async function openExternal(kind) {{
 
       if(s && s.show_banner === false) {{
         clearInterval(timer);
-
-        // 1) 배너만 제거 (원하는 동작)
         const el = document.getElementById('bannerWrap');
         if(el) el.innerHTML = '';
-
-        // 2) 필요하면 상태도 즉시 갱신
         try {{ await refreshStatus(); }} catch(e) {{}}
       }}
     }} catch(e) {{}}
@@ -918,9 +863,9 @@ async function testSend(){{
   if(!r.ok) {{
     showWarn(`
       <b>DM 전송 실패</b><br/>
-      아래 중 하나만 해주면 해결돼요.<br/>
-      1) 개인 서버에 봇 초대 (권장)<br/>
-      2) 공용 서버 참여로 DM 활성화 (대안)<br/><br/>
+      먼저 아래를 확인해 주세요.<br/>
+      1) 개인 서버에 봇을 초대했는지<br/>
+      2) 디스코드 설정에서 “서버 멤버의 DM 허용”이 꺼져있지 않은지<br/><br/>
       <span class="mono">${{t}}</span>
     `);
   }} else {{
@@ -929,13 +874,13 @@ async function testSend(){{
 }}
 
 async function fetchStatus() {{
-  const r = await fetch('/api/status.json');
+  const r = await fetch('/api/status.json', {{ cache: 'no-store' }});
   if(!r.ok) return null;
   return await r.json();
 }}
 
 async function fetchDmHealth() {{
-  const r = await fetch('/api/dm/health');
+  const r = await fetch('/api/dm/health', {{ cache: 'no-store' }});
   if(!r.ok) return null;
   return await r.json();
 }}
@@ -955,9 +900,8 @@ function calc(timer, serverNowIso, totalSec) {{
     active:true,
     leftSec,
     leftText: humanizeSeconds(leftSec),
-    // 서버에서 "사용자 타임존 기준" 문자열 내리기
     dueLocal: timer.due_at_local || "-",
-    setLocal: timer.last_set_at_local || "-",    
+    setLocal: timer.last_set_at_local || "-",
     pct
   }};
 }}
@@ -965,14 +909,12 @@ function calc(timer, serverNowIso, totalSec) {{
 let lastData = null;
 
 async function refreshStatus() {{
-  // ✅ 최초 1회(혹은 주기적으로) TZ 저장. 실패해도 기능은 동작.
-  // - session/DB에 저장되므로 poller(DM)도 동일 TZ로 보냄
-  
-  const data = await fetchStatus();
-  if(!data) return; // 로그인 안되어 401이면 여기서 종료
-  
+  // ✅ TZ를 먼저 저장해서 UI/DB 모두 즉시 반영
   await ensureTzOnce();
-  
+
+  const data = await fetchStatus();
+  if(!data) return;
+
   lastData = data;
 
   const r = calc(data.timers.rudolph, data.server_now, 3*3600);
@@ -1007,6 +949,7 @@ async function refreshStatus() {{
 function renderDetail() {{
   const data = lastData;
   if(!data) return;
+
   const r = calc(data.timers.rudolph, data.server_now, 3*3600);
   const b = calc(data.timers.bandage, data.server_now, 1*3600);
 
@@ -1039,13 +982,14 @@ async function openDetail() {{
 }}
 
 function closeDetail(e) {{
-  if (e && e.target && e.target.id !== 'modalBg') return; // 배경 클릭만 닫기
+  if (e && e.target && e.target.id !== 'modalBg') return;
   document.getElementById('modalBg').style.display = 'none';
 }}
 
 refreshStatus();
 setInterval(refreshStatus, 30000);
 </script>
+
 <button class="fabFeedback" onclick="openFeedback()">
   <span class="fabIcon">💬</span>
   피드백
@@ -1056,6 +1000,7 @@ setInterval(refreshStatus, 30000);
         login_btn=login_btn,
         invite_banner=invite_banner,
     )
+
     return HTMLResponse(html)
 
 @app.get("/logout")
@@ -1106,7 +1051,6 @@ async def set_tz(request: Request):
     data = await request.json()
     tz = (data.get("tz") or "").strip()
 
-    # 최소 검증
     if not tz or len(tz) > 64 or "/" not in tz:
         raise HTTPException(400, "bad tz")
 
@@ -1114,12 +1058,12 @@ async def set_tz(request: Request):
     request.session["tz"] = tz
     if tz != prev:
         upsert_user_tz(uid, tz)
+
     return JSONResponse({"ok": True, "tz": tz})
 
 @app.post("/api/ack/{kind}")
 async def ack(request: Request, kind: str):
-    # invite/public 둘 중 하나만 오게
-    if kind not in ("invite", "public"):
+    if kind != "invite":
         raise HTTPException(400, "bad kind")
     request.session["invite_clicked"] = True
     return JSONResponse({"ok": True})
@@ -1127,13 +1071,16 @@ async def ack(request: Request, kind: str):
 @app.post("/api/timer/{timer_type}")
 async def set_timer(request: Request, timer_type: str):
     uid = require_login(request)
+
+    require_dm_ready(uid)
+
     tz_name = request.session.get("tz") or get_user_tz(uid)
     request.session["tz"] = tz_name
+
     if timer_type not in ("rudolph", "bandage"):
         raise HTTPException(400, "unknown timer_type")
 
     hours = 3 if timer_type == "rudolph" else 1
-    # 타이머 계산/저장은 UTC 기준으로 (DB 표준화)
     due_u = now_utc() + timedelta(hours=hours)
     upsert_timer(uid, timer_type, due_u)
 
@@ -1145,14 +1092,21 @@ async def test_send(request: Request):
     uid = require_login(request)
     tz_name = request.session.get("tz") or get_user_tz(uid)
     request.session["tz"] = tz_name
+
     try:
         await discord_send_dm(uid, "✅ 테스트 DM: 테스트 메시지가 정상적으로 도착했어요!")
         upsert_dm_result(uid, ok=True)
         return HTMLResponse("✅ 테스트 DM을 보냈어요! (Discord DM 확인)")
+
     except httpx.HTTPStatusError as e:
         err_txt = f"{e.response.status_code} {e.response.text}"
         upsert_dm_result(uid, ok=False, err=err_txt)
-        return HTMLResponse(f"❌ DM 전송 실패: {err_txt}", status_code=400)
+        return HTMLResponse(
+            f"❌ DM 전송 실패: {err_txt}\n"
+            f"→ 개인 서버에 봇을 초대했는지 확인하고, 디스코드에서 서버/DM 설정을 확인해 주세요.",
+            status_code=400
+        )
+
     except Exception as e:
         upsert_dm_result(uid, ok=False, err=str(e))
         return HTMLResponse(f"❌ DM 전송 실패: {e}", status_code=400)
@@ -1168,17 +1122,21 @@ async def dm_health(request: Request):
 @app.get("/api/banner")
 async def banner_state(request: Request):
     uid = request.session.get("discord_user_id")
-    invite_clicked = bool(request.session.get("invite_clicked"))
+    if not uid:
+        return JSONResponse({"logged_in": False, "show_banner": False})
+
+    dm_ready = is_dm_ready(uid)
     return JSONResponse({
-        "logged_in": bool(uid),
-        "invite_clicked": invite_clicked,
-        "show_banner": bool(uid) and (not invite_clicked),
+        "logged_in": True,
+        "dm_ready": dm_ready,
+        "show_banner": (not dm_ready),
     })
 
 @app.get("/api/status.json")
 async def status_json(request: Request):
     uid = require_login(request)
     timers = get_timers(uid)
+
     tz_name = request.session.get("tz") or get_user_tz(uid)
     request.session["tz"] = tz_name
 
@@ -1198,15 +1156,11 @@ async def status_json(request: Request):
         return {
             "timer_type": row.get("timer_type"),
             "status": row.get("status"),
-
-            # 계산용(UTC ISO)
             "last_set_at": set_iso,
             "due_at": due_iso,
-
-            # 표시용(사용자 TZ 문자열)
             "last_set_at_local": local_str_from_iso(set_iso),
             "due_at_local": local_str_from_iso(due_iso),
-            }
+        }
 
     return JSONResponse({
         "server_now": now_utc().isoformat(),
@@ -1251,6 +1205,7 @@ async def poller():
                     mark_failed(uid, t, str(e))
                     upsert_dm_result(uid, ok=False, err=str(e))
                     print("[SEND FAIL]", uid, t, e)
+
         except Exception as e:
             print("[POLL LOOP FAIL]", e)
 
