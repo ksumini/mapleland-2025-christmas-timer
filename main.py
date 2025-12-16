@@ -418,6 +418,17 @@ async def home(request: Request):
       font-weight:700;
       transition: box-shadow .18s ease, border-color .18s ease, transform .18s ease;
     }}
+    
+    .btnIcon {{
+      width: 36px;
+      height: 36px;
+      padding: 0;
+      border-radius: 999px;
+      font-size: 16px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }}
 
     .btnLogin, .btnLogout {{
       display:inline-flex;
@@ -682,8 +693,8 @@ async def home(request: Request):
           <div class="progress" style="margin-top:8px"><div class="bar" id="rudolph_bar"></div></div>
         </div>
 
-        <div style="margin-top:10px; display:flex; gap:8px;">
-          <button class="btn" onclick="cancelTimer('rudolph')">중지</button>
+        <div style="margin-top:10px; display:flex; justify-content:flex-end;">
+          <div id="rudolph_ctl"></div>
         </div>
       </div>
 
@@ -702,8 +713,8 @@ async def home(request: Request):
           <div class="mono" id="bandage_line">상태 불러오는 중…</div>
           <div class="progress" style="margin-top:8px"><div class="bar" id="bandage_bar"></div></div>
 
-          <div style="margin-top:10px; display:flex; gap:8px;">
-            <button class="btn" onclick="cancelTimer('bandage')">중지</button>
+          <div style="margin-top:10px; display:flex; justify-content:flex-end;">
+            <div id="bandage_ctl"></div>
           </div>
         </div>
       </div>
@@ -780,6 +791,21 @@ async function ensureTzOnce() {{
   if (tzReady) return;
   const ok = await ensureTz();
   if (ok) tzReady = true;
+}}
+
+function renderCtl(type, isActive) {{
+  const el = document.getElementById(type + '_ctl');
+  if (!el) return;
+  
+  if (isActive) {{
+    el.innerHTML = `
+      <button class="btnGhost btnIcon" onclick="cancelTimer('${{type}}')" title="타이머 정지">⏹</button>
+    `;
+  }} else {{
+    el.innerHTML = `
+      <button class="btnPrimary btnIcon" onclick="startTimer('${{type}}')" title="타이머 시작">▶</button>
+    `;
+  }}
 }}
 
 function openFeedback() {{
@@ -960,6 +986,9 @@ async function refreshStatus() {{
   const r = calc(finalData.timers.rudolph, finalData.server_now, 3*3600);
   const b = calc(finalData.timers.bandage, finalData.server_now, 1*3600);
 
+  renderCtl("rudolph", r.active);
+  renderCtl("bandage", b.active);
+  
   document.getElementById('rudolph_left').textContent = r.leftText;
   document.getElementById('bandage_left').textContent = b.leftText;
 
