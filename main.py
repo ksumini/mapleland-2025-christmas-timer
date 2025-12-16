@@ -751,7 +751,6 @@ async def home(request: Request):
             <th>남은 시간</th>
             <th>마지막 설정</th>
             <th>진행률</th>
-            <th>중지</th>
           </tr>
         </thead>
         <tbody id="detailBody"></tbody>
@@ -857,17 +856,24 @@ async function cancelTimer(type) {{
   await refreshStatus();
 }}
 
+let testDmAttempted = false;
+
 async function testSend(){{
+  testDmAttempted = true;
+  
   const r = await fetch('/api/test-send', {{method:'POST'}});
   if (r.status === 401) {{ showLoginRequired(); return; }}
-  const t = await r.text();
-  document.getElementById('hint').textContent = t.replaceAll('\\n','  ');
   
-  if (r.ok) {{
-    hideWarn();
+  if (!r.ok) {{
+     showWarn(`
+      <b>테스트 DM을 성공적으로 보낼 수 없어요😢</b><br/>
+      위의 <b>“봇 초대하기 → 테스트 DM”</b> 버튼을 다시 눌러주세요.
+      `);
+  }} else {{
+       hideWarn();
+       document.getElementById('hint').textContent = 
+         '✅ 테스트 DM이 성공적으로 도착했어요!';
   }}
-  
-  await refreshStatus();
 }}
 
 function showLoginRequired() {{
@@ -971,11 +977,8 @@ async function refreshStatus() {{
   }}
 
   const dm = await fetchDmHealth();
-  if(dm && dm.dm_status === 'fail') {{
-    showWarn(`
-      <b>테스트 DM을 성공적으로 보낼 수 없어요😢</b><br/>
-      위의 <b>“봇 초대하기 → 테스트 DM”</b> 버튼을 다시 눌러주세요.
-    `);
+  if(dm && dm.dm_status === 'ok') {{
+    hideWarn();
   }}
 }}
 
@@ -998,12 +1001,6 @@ function renderDetail() {{
       <td>${{x.left}}</td>
       <td>${{x.set}}</td>
       <td>${{Math.round(x.pct)}}%</td>
-      <td>
-        ${{ x.active
-          ? `<button class="btn" onclick="cancelTimer('${{x.type}}')">중지</button>`
-          : `<span class="mono">-</span>`
-        }}
-      </td>
     </tr>
   `).join('');
 }}
