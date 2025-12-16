@@ -843,6 +843,7 @@ async function openExternal(kind) {{
 
 async function startTimer(type) {{
   const r = await fetch('/api/timer/' + type, {{method:'POST'}});
+  if (r.status === 401) {{ showLoginRequired(); return; }}
   const t = await r.text();
   document.getElementById('hint').textContent = t.replaceAll('\\n','  ');
   await refreshStatus();
@@ -850,6 +851,7 @@ async function startTimer(type) {{
 
 async function cancelTimer(type) {{
   const r = await fetch('/api/timer/' + type + '/cancel', {{method:'POST'}});
+  if (r.status === 401) {{ showLoginRequired(); return; }}
   const t = await r.text();
   document.getElementById('hint').textContent = t.replaceAll('\\n','  ');
   await refreshStatus();
@@ -857,6 +859,7 @@ async function cancelTimer(type) {{
 
 async function testSend(){{
   const r = await fetch('/api/test-send', {{method:'POST'}});
+  if (r.status === 401) {{ showLoginRequired(); return; }}
   const t = await r.text();
   document.getElementById('hint').textContent = t.replaceAll('\\n','  ');
 
@@ -873,14 +876,45 @@ async function testSend(){{
   }}
 }}
 
+function showLoginRequired() {{
+  showWarn(`
+    <b>로그인이 필요합니다.</b><br/>
+    오른쪽 상단에서 로그인하거나 아래 버튼을 눌러주세요.<br/><br/>
+    <a class="btnPrimary" href="/auth/discord/login" style="display:inline-block;">디스코드로 로그인</a>
+  `);
+  
+  // 상태 UI도 초기화
+  document.getElementById('rudolph_left').textContent = '-';
+  document.getElementById('bandage_left').textContent = '-';
+  document.getElementById('rudolph_line').textContent = '로그인 후 확인 가능';
+  document.getElementById('bandage_line').textContent = '로그인 후 확인 가능';
+  document.getElementById('rudolph_bar').style.width = "0%";
+  document.getElementById('bandage_bar').style.width = "0%";
+}}
+
 async function fetchStatus() {{
   const r = await fetch('/api/status.json', {{ cache: 'no-store' }});
-  if(!r.ok) return null;
+  
+  // 로그인 필요(401)면: JSON(detail) 찍지 않고 UI 안내로 처리
+  if (r.status == 401) {{
+    showLoginRequired();
+    return null;
+  }}
+  
+  if(!r.ok) {{
+    // 그 외 에러는 필요하면 메시지 표시
+    const t = await r.text().catch(() => '');
+    showWarn(`<b>상태를 불러오지 못했어요.</b><br/><span class="mono">${{t}}</span>`);
+    return null;
+  }}
+  
+  hideWarn();
   return await r.json();
 }}
 
 async function fetchDmHealth() {{
   const r = await fetch('/api/dm/health', {{ cache: 'no-store' }});
+  if (r.status === 401) {{ showLoginRequired(); return null; }}
   if(!r.ok) return null;
   return await r.json();
 }}
@@ -909,16 +943,23 @@ function calc(timer, serverNowIso, totalSec) {{
 let lastData = null;
 
 async function refreshStatus() {{
-  // ✅ TZ를 먼저 저장해서 UI/DB 모두 즉시 반영
-  await ensureTzOnce();
-
   const data = await fetchStatus();
   if(!data) return;
+  
+  const wasTzReady = tzReady;
+  await ensureTzOnce(); // 로그인 된 뒤에 tz 저장
+  
+  // tz가 방금 처음 저장된 경우에만 status를 한번 더 받아서 local time 재계산값 반영
+  let finalData = data;
+  if (!wasTzReady && tzReady) {{
+    const data2 = await fetchStatus();
+    if (data2) finalData = data2;
+  }}
+  
+  lastData = finalData;
 
-  lastData = data;
-
-  const r = calc(data.timers.rudolph, data.server_now, 3*3600);
-  const b = calc(data.timers.bandage, data.server_now, 1*3600);
+  const r = calc(finalData.timers.rudolph, finalData.server_now, 3*3600);
+  const b = calc(finalData.timers.bandage, finalData.server_now, 1*3600);
 
   document.getElementById('rudolph_left').textContent = r.leftText;
   document.getElementById('bandage_left').textContent = b.leftText;
@@ -939,9 +980,8 @@ async function refreshStatus() {{
   const dm = await fetchDmHealth();
   if(dm && dm.dm_status === 'fail') {{
     showWarn(`
-      <b>DM이 막혀있을 수 있어요.</b><br/>
-      마지막 실패: <span class="mono">${{dm.dm_last_error || '-'}}</span><br/>
-      “테스트 DM” 버튼으로 먼저 확인해 주세요.
+      <b>DM이 막혀있는 것 같아요😢</b><br/>
+      봇 초대 후 “테스트 DM” 버튼으로 먼저 확인해 주세요.
     `);
   }}
 }}
