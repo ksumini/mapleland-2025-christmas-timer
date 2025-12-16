@@ -420,16 +420,49 @@ async def home(request: Request):
     }}
     
     .btnIcon {{
-      width: 36px;
-      height: 36px;
+      width: 44px;
+      height: 44px;
       padding: 0;
-      border-radius: 999px;
-      font-size: 16px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
+      border-radius: 16px;
+      
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      border: 1px solid rgba(255,255,255,.10);
+      box-shadow:
+        0 10px 24px rgba(0,0,0,.28),
+        0 0 0 1px rgba(255,255,255,.05) inset;
+      backdrop-filter: blur(10px);
     }}
-
+    
+    .btnIcon img {{
+      width: 30px;
+      height: 30px;
+      display:block;
+    }}
+    
+        .btnDanger{{
+      padding:10px 14px;
+      border-radius:12px;
+      border:1px solid rgba(255,90,107,.55);
+      background: rgba(255,90,107,.14);
+      color: var(--text);
+      font-weight:900;
+      cursor:pointer;
+      transition: box-shadow .18s ease, transform .18s ease, border-color .18s ease;
+    }}
+    .btnDanger:hover{{
+      border-color: rgba(255,90,107,.75);
+      box-shadow:
+        0 0 0 1px rgba(255,90,107,.12) inset,
+        0 16px 34px rgba(255,90,107,.14);
+      transform: translateY(-1px);
+    }}
+    
+    /* 눌림/호버 느낌 */
+    .btnIcon:active{{ transform: translateY(1px); }}
+    .btnIcon:hover{{ border-color: rgba(241,196,15,.35); }}
+    
     .btnLogin, .btnLogout {{
       display:inline-flex;
       align-items:center;
@@ -706,7 +739,7 @@ async def home(request: Request):
               <div class="title">반창고</div>
               <div class="pill">1시간</div>
             </div>
-            <div class="meta">🩹산타 고양이 선물상자🩹<br>퀘스트 완료 후 눌러주세요!</div>
+            <div class="meta">🩹산타 고양이의 선물상자🩹<br>퀘스트 완료 후 눌러주세요!</div>
           </div>
         </button>
         <div style="margin-top:12px">
@@ -745,6 +778,31 @@ async def home(request: Request):
     </div>
   </div>
 
+  <!-- Confirm Cancel Modal -->
+  <div class="modalBg" id="confirmBg" onclick="closeConfirm(event)">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="modalHeader">
+        <div>
+          <div class="title" id="confirmTitle">타이머를 정지할까요?</div>
+          <div class="meta" id="confirmDesc">
+            정지하면 현재 남은 시간과 설정 정보가 모두 삭제됩니다.
+          </div>
+        </div>
+        <button class="close" onclick="closeConfirm()">닫기</button>
+      </div>
+
+      <div class="warnBox" style="display:block; margin-top:12px;">
+        <b>⚠️주의</b><br/>
+        이 작업은 <b>되돌릴 수 없습니다.</b><br/>
+        다시 시작하려면 <b>퀘스트 완료 후</b> 버튼을 다시 눌러야 해요.
+      </div>
+
+      <div style="margin-top:12px; display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap;">
+        <button class="btn" onclick="closeConfirm()">취소</button>
+        <button class="btnDanger" id="confirmOkBtn">타이머 정지</button>
+      </div>
+    </div>
+  </div>
   <div class="modalBg" id="modalBg" onclick="closeDetail(event)">
     <div class="modal" onclick="event.stopPropagation()">
       <div class="modalHeader">
@@ -799,11 +857,20 @@ function renderCtl(type, isActive) {{
   
   if (isActive) {{
     el.innerHTML = `
-      <button class="btnGhost btnIcon" onclick="cancelTimer('${{type}}')" title="타이머 정지">⏹</button>
+      <button class="btnGhost btnIcon" 
+              onclick="confirmCancelModal('${{type}}')" 
+              title="타이머 정지" aria-label="타이머 정지">
+        <img src="/static/icon_stop.svg" alt="stop">
+      </button>
     `;
   }} else {{
     el.innerHTML = `
-      <button class="btnPrimary btnIcon" onclick="startTimer('${{type}}')" title="타이머 시작">▶</button>
+      <button class="btnPrimary btnIcon" 
+              onclick="startTimer('${{type}}')" 
+              title="타이머 시작" 
+              aria-label="타이머 시작">
+        <img src="/static/icon_play.svg" alt="play">
+      </button>
     `;
   }}
 }}
@@ -881,6 +948,44 @@ async function cancelTimer(type) {{
   document.getElementById('hint').textContent = t.replaceAll('\\n','  ');
   await refreshStatus();
 }}
+
+let pendingCancelType = null;
+
+function timerLabel(type) {{
+  return type === 'rudolph' ? '루돌프 코 (3시간)' : '반창고 (1시간)';
+}}
+
+function confirmCancelModal(type) {{
+  pendingCancelType = type;
+
+  const titleEl = document.getElementById('confirmTitle');
+  const descEl = document.getElementById('confirmDesc');
+  const okBtn = document.getElementById('confirmOkBtn');
+
+  if (titleEl) titleEl.textContent = `${{timerLabel(type)}} 타이머를 정지할까요?`;
+  if (descEl) descEl.innerHTML =
+    `정지하면 <b>현재 남은 시간</b>과 <b>설정 정보</b>가 모두 삭제됩니다.`;
+
+  if (okBtn) {{
+    okBtn.onclick = async () => {{
+      const t = pendingCancelType;
+      pendingCancelType = null;
+      closeConfirm();
+      if (t) await cancelTimer(t);
+    }};
+  }}
+
+  const bg = document.getElementById('confirmBg');
+  if (bg) bg.style.display = 'flex';
+}}
+
+function closeConfirm(e) {{
+  if (e && e.target && e.target.id !== 'confirmBg') return;
+  const bg = document.getElementById('confirmBg');
+  if (bg) bg.style.display = 'none';
+  pendingCancelType = null;
+}}
+
 
 let testDmAttempted = false;
 
