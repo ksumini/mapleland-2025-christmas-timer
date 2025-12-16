@@ -277,7 +277,7 @@ async def home(request: Request):
     if logged_in:
         login_btn = """<a class="btnLogout" href="/logout">로그아웃</a>"""
     else:
-        login_btn = """<a class="btnLogin" href="/auth/discord/login">디스코드로 로그인</a>"""
+        login_btn = """<a class="btnLogin" href="/auth/discord/login">🎮디스코드로 로그인</a>"""
 
     dm_ready = False
     if logged_in:
@@ -879,8 +879,7 @@ async function testSend(){{
 function showLoginRequired() {{
   showWarn(`
     <b>로그인이 필요합니다.</b><br/>
-    오른쪽 상단에서 로그인하거나 아래 버튼을 눌러주세요.<br/><br/>
-    <a class="btnPrimary" href="/auth/discord/login" style="display:inline-block;">디스코드로 로그인</a>
+    오른쪽 상단의 디스코드로 로그인 버튼을 눌러주세요.<br/><br/>
   `);
   
   // 상태 UI도 초기화
@@ -1142,7 +1141,7 @@ async def test_send(request: Request):
         err_txt = f"{e.response.status_code} {e.response.text}"
         upsert_dm_result(uid, ok=False, err=err_txt)
         return HTMLResponse(
-            f"❌ DM 전송 실패: {err_txt}\n"
+            # f"❌ DM 전송 실패: {err_txt}\n"
             f"→ 개인 서버에 봇을 초대했는지 확인하고, 디스코드에서 서버/DM 설정을 확인해 주세요.",
             status_code=400
         )
