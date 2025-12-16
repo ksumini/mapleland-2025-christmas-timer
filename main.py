@@ -150,13 +150,6 @@ def cancel_timer(user_id: str, timer_type: str, reason: str = "user_canceled"):
         "fail_reason": reason,
     }).eq("discord_user_id", user_id).eq("timer_type", timer_type).execute()
 
-def cancel_all_timers(user_id: str, reason: str = "user_canceled"):
-    sb.table(TIMERS_TABLE).update({
-        "status": "canceled",
-        "updated_at": now_utc().isoformat(),
-        "fail_reason": reason,
-    }).eq("discord_user_id", user_id).execute()
-
 def upsert_timer(user_id: str, timer_type: str, due_at_utc: datetime):
     sb.table(TIMERS_TABLE).upsert({
         "discord_user_id": user_id,
@@ -806,6 +799,7 @@ async def home(request: Request):
             <th>남은 시간</th>
             <th>마지막 설정</th>
             <th>진행률</th>
+            <th>중지</th>
           </tr>
         </thead>
         <tbody id="detailBody"></tbody>
@@ -906,7 +900,7 @@ async function startTimer(type) {{
   await refreshStatus();
 }}
 
-async function cacelTimer(type) {{
+async function cancelTimer(type) {{
   const r = await fetch('/api/timer/' + type + '/cancel', {{method:'POST'}});
   const t = await r.text();
   document.getElementById('hint').textContent = t.replaceAll('\\n','  ');
@@ -1012,8 +1006,8 @@ function renderDetail() {{
   const b = calc(data.timers.bandage, data.server_now, 1*3600);
 
   const rows = [
-    {{ name: "루돌프 코 (3시간)", due: r.dueLocal, left: r.leftText, set: r.setLocal, pct: r.pct }},
-    {{ name: "반창고 (1시간)", due: b.dueLocal, left: b.leftText, set: b.setLocal, pct: b.pct }}
+    {{ type:"rudolph", name: "루돌프 코 (3시간)", due: r.dueLocal, left: r.leftText, set: r.setLocal, pct: r.pct, active: r.active}},
+    {{ type:"bandage", name: "반창고 (1시간)", due: b.dueLocal, left: b.leftText, set: b.setLocal, pct: b.pct, active: b.active}}
   ];
 
   document.getElementById('detailBody').innerHTML = rows.map(x => `
@@ -1023,6 +1017,12 @@ function renderDetail() {{
       <td>${{x.left}}</td>
       <td>${{x.set}}</td>
       <td>${{Math.round(x.pct)}}%</td>
+      <td>
+        ${{ x.active
+          ? `<button class="btn" onclick="cancelTimer('${{x.type}}')">중지</button>`
+          : `<span class="mono">-</span>`
+        }}
+      </td>
     </tr>
   `).join('');
 }}
@@ -1033,7 +1033,8 @@ async function openDetail() {{
   renderDetail();
 }}
 
-function closeDetail() {{
+function closeDetail(e) {{
+  if (e && e.target && e.target.id !== 'modalBg') return; // 배경 클릭만 닫기
   document.getElementById('modalBg').style.display = 'none';
 }}
 
@@ -1088,12 +1089,6 @@ async def cancel_one(request: Request, timer_type: str):
     cancel_timer(uid, timer_type)
     label = "루돌프 코(3시간)" if timer_type == "rudolph" else "반창고(1시간)"
     return HTMLResponse(f"🛑 {label} 타이머를 중지했어요. (삭제됨)")
-
-@app.post("/api/timer/cancel-all")
-async def cancel_all(request: Request):
-    uid = require_login(request)
-    cancel_all_timers(uid)
-    return HTMLResponse("🛑 모든 타이머를 중지했어요. (삭제됨)")
 
 @app.post("/api/tz")
 async def set_tz(request: Request):
