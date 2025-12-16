@@ -143,6 +143,20 @@ async def discord_send_dm(user_id: str, text: str):
 # =====================================================
 # DB helpers
 # =====================================================
+def cancel_timer(user_id: str, timer_type: str, reason: str = "user_canceled"):
+    sb.table(TIMERS_TABLE).update({
+        "status": "canceled",
+        "updated_at": now_utc().isoformat(),
+        "fail_reason": reason,
+    }).eq("discord_user_id", user_id).eq("timer_type", timer_type).execute()
+
+def cancel_all_timers(user_id: str, reason: str = "user_canceled"):
+    sb.table(TIMERS_TABLE).update({
+        "status": "canceled",
+        "updated_at": now_utc().isoformat(),
+        "fail_reason": reason,
+    }).eq("discord_user_id", user_id).execute()
+
 def upsert_timer(user_id: str, timer_type: str, due_at_utc: datetime):
     sb.table(TIMERS_TABLE).upsert({
         "discord_user_id": user_id,
@@ -721,6 +735,10 @@ async def home(request: Request):
           <div class="mono" id="rudolph_line">상태 불러오는 중…</div>
           <div class="progress" style="margin-top:8px"><div class="bar" id="rudolph_bar"></div></div>
         </div>
+        
+        <div style="margin-top:10px; display:flex; gap:8px;">
+          <button class="btn" onclick="cancelTimer('rudolph')">중지</button>
+        </div>
       </div>
 
       <div class="card">
@@ -737,6 +755,10 @@ async def home(request: Request):
         <div style="margin-top:12px">
           <div class="mono" id="bandage_line">상태 불러오는 중…</div>
           <div class="progress" style="margin-top:8px"><div class="bar" id="bandage_bar"></div></div>
+          
+          <div style="margin-top:10px; display:flex; gap:8px;">
+            <button class="btn" onclick="cancelTimer('bandage')">중지</button>
+          </div>
         </div>
       </div>
     </div>
@@ -762,7 +784,7 @@ async def home(request: Request):
           <div class="v" id="bandage_left">-</div>
         </div>
       </div>
-      <div class="mono" style="margin-top:10px" id="hint">같은 버튼(루돌프 코, 반창고)을 다시 누르면 덮어써요.</div>
+      <div class="mono" style="margin-top:10px" id="hint">같은 버튼을 다시 누르면 시간 리셋!</div>
     </div>
   </div>
 
@@ -788,7 +810,7 @@ async def home(request: Request):
         </thead>
         <tbody id="detailBody"></tbody>
       </table>
-      <div class="mono" style="margin-top:10px">※ 버튼을 다시 누르면 “최근 것만” 덮어써서 갱신돼요.</div>
+      <div class="mono" style="margin-top:10px">※ 같은 타이머를 다시 누르면 남은 시간이 처음부터 다시 시작돼요.</div>
     </div>
   </div>
 
@@ -879,6 +901,13 @@ async function openExternal(kind) {{
 
 async function startTimer(type) {{
   const r = await fetch('/api/timer/' + type, {{method:'POST'}});
+  const t = await r.text();
+  document.getElementById('hint').textContent = t.replaceAll('\\n','  ');
+  await refreshStatus();
+}}
+
+async function cacelTimer(type) {{
+  const r = await fetch('/api/timer/' + type + '/cancel', {{method:'POST'}});
   const t = await r.text();
   document.getElementById('hint').textContent = t.replaceAll('\\n','  ');
   await refreshStatus();
@@ -1050,6 +1079,22 @@ async def discord_callback(request: Request, code: str | None = None, error: str
 # =====================================================
 # API
 # =====================================================
+@app.post("/api/timer/{timer_type}/cancel")
+async def cancel_one(request: Request, timer_type: str):
+    uid = require_login(request)
+    if timer_type not in ("rudolph", "bandage"):
+        raise HTTPException(400, "unknown timer_type")
+
+    cancel_timer(uid, timer_type)
+    label = "루돌프 코(3시간)" if timer_type == "rudolph" else "반창고(1시간)"
+    return HTMLResponse(f"🛑 {label} 타이머를 중지했어요. (삭제됨)")
+
+@app.post("/api/timer/cancel-all")
+async def cancel_all(request: Request):
+    uid = require_login(request)
+    cancel_all_timers(uid)
+    return HTMLResponse("🛑 모든 타이머를 중지했어요. (삭제됨)")
+
 @app.post("/api/tz")
 async def set_tz(request: Request):
     """
