@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>메이플랜드 크리스마스 이벤트 타이머 (Discord DM)</title>
+
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div class="topLeft">
+        <h1>🎄 메이플랜드 크리스마스 이벤트 타이머 <span class="pill pill-inline">Discord DM 알림</span></h1>
+        <p class="sub">퀘스트 완료 후 버튼 클릭 → 시간이 되면 Discord DM으로 알림 전송</p>
+      </div>
+    </div>
+
+    <div class="authRow">
+      {% if logged_in %}
+        <a class="btnLogout" href="/logout">로그아웃</a>
+      {% else %}
+        <a class="btnLogin" href="/auth/discord/login"><span class="fabIcon">🎮</span>디스코드로 로그인</a>
+      {% endif %}
+    </div>
+
+    <div id="bannerWrap">
+      {% if logged_in and not dm_ready %}
+      <div class="banner2">
+        <div class="bannerText">
+          <div class="bannerTitle">📩 DM 알림을 받으려면 먼저 2단계만 완료해 주세요</div>
+          <div class="bannerSub">
+            1) 개인 서버(관리자)로 봇 초대<br/>
+            2) “테스트 DM”으로 알림 수신 확인
+          </div>
+          <div class="bannerSub2">
+            개인 서버가 없으면 30초만에 만들 수 있어요:
+            <a class="miniLink" href="https://support.discord.com/hc/ko/articles/204849977" target="_blank" rel="noopener">서버 만들기</a>
+          </div>
+        </div>
+
+        <div class="bannerBtns">
+          <button class="btnPrimary" onclick="openExternal('invite')">봇 초대하기</button>
+          <button class="btnGhost" onclick="testSend()">테스트 DM</button>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="warnBox" id="dmWarn"></div>
+
+    <div class="grid">
+      <div class="card">
+        <button class="timerBtn" onclick="startTimer('rudolph')">
+          <div class="avatar"><img src="/static/rudolph.png" alt="rudolph"/></div>
+          <div style="flex:1">
+            <div class="row">
+              <div class="title">루돌프 코</div>
+              <div class="pill">3시간</div>
+            </div>
+            <div class="meta">🦌토르의 뿔🦌<br>퀘스트 완료 후 눌러주세요!</div>
+          </div>
+        </button>
+
+        <div style="margin-top:12px">
+          <div class="mono" id="rudolph_line">상태 불러오는 중…</div>
+          <div class="progress" style="margin-top:8px"><div class="bar" id="rudolph_bar"></div></div>
+        </div>
+
+        <div style="margin-top:10px; display:flex; justify-content:flex-end;">
+          <div id="rudolph_ctl"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <button class="timerBtn" onclick="startTimer('bandage')">
+          <div class="avatar"><img src="/static/bandage.png" alt="bandage"/></div>
+          <div style="flex:1">
+            <div class="row">
+              <div class="title">반창고</div>
+              <div class="pill">1시간</div>
+            </div>
+            <div class="meta">🩹산타 고양이의 선물상자🩹<br>퀘스트 완료 후 눌러주세요!</div>
+          </div>
+        </button>
+
+        <div style="margin-top:12px">
+          <div class="mono" id="bandage_line">상태 불러오는 중…</div>
+          <div class="progress" style="margin-top:8px"><div class="bar" id="bandage_bar"></div></div>
+        </div>
+
+        <div style="margin-top:10px; display:flex; justify-content:flex-end;">
+          <div id="bandage_ctl"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card statusCard">
+      <div class="row">
+        <div>
+          <div class="title">⏱️ 내 타이머</div>
+          <div class="meta">남은 시간은 실시간으로 갱신됩니다.</div>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button class="btn" onclick="openDetail()">상세 보기</button>
+          <button class="btn" onclick="testSend()">📩 테스트 DM</button>
+        </div>
+      </div>
+
+      <div class="kpi">
+        <div class="box">
+          <div class="k">루돌프 코 남은 시간</div>
+          <div class="v" id="rudolph_left">-</div>
+        </div>
+        <div class="box">
+          <div class="k">반창고 남은 시간</div>
+          <div class="v" id="bandage_left">-</div>
+        </div>
+      </div>
+
+      <div class="mono" style="margin-top:10px" id="hint">같은 버튼을 다시 누르면 시간 리셋!</div>
+    </div>
+  </div>
+
+  <!-- Confirm Cancel Modal -->
+  <div class="modalBg" id="confirmBg" onclick="closeConfirm(event)">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="modalHeader">
+        <div>
+          <div class="title" id="confirmTitle">타이머를 정지할까요?</div>
+          <div class="meta" id="confirmDesc">정지하면 현재 남은 시간과 설정 정보가 모두 삭제됩니다.</div>
+        </div>
+        <button class="close" onclick="closeConfirm()">닫기</button>
+      </div>
+
+      <div class="warnBox" style="display:block; margin-top:12px;">
+        <b>⚠️주의</b><br/>
+        이 작업은 <b>되돌릴 수 없습니다.</b><br/>
+        다시 시작하려면 <b>퀘스트 완료 후</b> 버튼을 다시 눌러야 해요.
+      </div>
+
+      <div style="margin-top:12px; display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap;">
+        <button class="btn" onclick="closeConfirm()">취소</button>
+        <button class="btnDanger" id="confirmOkBtn">타이머 정지</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Detail Modal -->
+  <div class="modalBg" id="modalBg" onclick="closeDetail(event)">
+    <div class="modal" onclick="event.stopPropagation()">
+      <div class="modalHeader">
+        <div>
+          <div class="title">📋 타이머 상세</div>
+          <div class="meta">다음 알림 시각, 마지막 설정 시각, 진행률을 확인할 수 있어요.</div>
+        </div>
+        <button class="close" onclick="closeDetail()">닫기</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>타이머</th>
+            <th>다음 알림</th>
+            <th>남은 시간</th>
+            <th>마지막 설정</th>
+            <th>진행률</th>
+          </tr>
+        </thead>
+        <tbody id="detailBody"></tbody>
+      </table>
+      <div class="mono" style="margin-top:10px">※ 같은 타이머를 다시 누르면 남은 시간이 처음부터 다시 시작돼요.</div>
+    </div>
+  </div>
+
+  <button class="fabFeedback" onclick="openFeedback()">
+    <span class="fabIcon">💬</span>
+    피드백
+  </button>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
